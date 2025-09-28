@@ -39,7 +39,7 @@ app.get("/", (req, res) => {
                 <h1>Facebook Comments Overlay Server</h1>
                 <p>Server is running! Use this URL in OBS:</p>
                 <p><a href="/overlay.html">/overlay.html</a></p>
-                <p><strong>🎲 Comments with REAL commenter names!</strong></p>
+                <p><strong>🎲 Trying multiple approaches to get REAL names!</strong></p>
             </body>
         </html>
     `);
@@ -75,25 +75,32 @@ function shuffleArray(array) {
 
 // Function to extract commenter name from various possible structures
 function extractCommenterName(comment) {
+    console.log('🔍 Comment structure:', JSON.stringify(comment, null, 2));
+    
     // Try different possible locations for the name
     if (comment.from && comment.from.name) {
+        console.log('✅ Found name in from.name:', comment.from.name);
         return comment.from.name;
     }
     if (comment.user && comment.user.name) {
+        console.log('✅ Found name in user.name:', comment.user.name);
         return comment.user.name;
     }
     if (comment.author && comment.author.name) {
+        console.log('✅ Found name in author.name:', comment.author.name);
         return comment.author.name;
     }
     if (comment.commenter && comment.commenter.name) {
+        console.log('✅ Found name in commenter.name:', comment.commenter.name);
         return comment.commenter.name;
     }
     if (comment.created_by && comment.created_by.name) {
+        console.log('✅ Found name in created_by.name:', comment.created_by.name);
         return comment.created_by.name;
     }
     
-    // If no name found, log the structure for debugging
-    console.log('🔍 No name found in comment structure:', Object.keys(comment));
+    // If no name found, try to extract from ID or use fallback
+    console.log('❌ No name found in comment, available keys:', Object.keys(comment));
     return 'Viewer'; // Fallback name
 }
 
@@ -106,13 +113,9 @@ function cleanComments(comments) {
         const hasMessage = comment && comment.message;
         
         if (!hasMessage) {
-            console.log('❌ Filtered out comment without message:', comment);
+            console.log('❌ Filtered out comment without message');
             return false;
         }
-        
-        // Extract and log the name for debugging
-        const name = extractCommenterName(comment);
-        console.log(`✅ Found comment from "${name}": ${comment.message.substring(0, 30)}...`);
         
         return true;
     }).map(comment => {
@@ -148,58 +151,78 @@ function getRandomComments(count = 5) {
     return shuffled.slice(0, count);
 }
 
-// Function to get comments from Facebook
+// Function to get comments from Facebook - TRY DIFFERENT FIELD COMBINATIONS
 async function fetchComments() {
     try {
         console.log('🔄 Fetching comments from Facebook...');
         
-        // Try different field combinations to get the commenter name
-        const url = `https://graph.facebook.com/v21.0/${VIDEO_ID}/comments?fields=from{name},message,created_time&access_token=${PAGE_ACCESS_TOKEN}`;
-        console.log('📡 API URL:', url.replace(PAGE_ACCESS_TOKEN, 'TOKEN_HIDDEN'));
+        // Try different field combinations to get names
+        const fieldCombinations = [
+            'from{name},message,created_time',  // Nested fields
+            'from,message,created_time',        // Regular fields
+            'from.name,message,created_time',   // Dot notation
+            'message,created_time,from',        // Different order
+        ];
         
-        const response = await fetch(url);
+        let success = false;
         
-        console.log('📊 Response status:', response.status);
-        
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('❌ HTTP Error:', response.status, errorText);
-            return false;
-        }
-        
-        const data = await response.json();
-        console.log('📦 Full API response structure:', Object.keys(data));
-
-        if (data.error) {
-            console.error("❌ Facebook API error:", data.error);
-            return false;
-        }
-
-        if (data.data && data.data.length > 0) {
-            console.log('🔍 First comment sample:', JSON.stringify(data.data[0], null, 2));
+        for (let fields of fieldCombinations) {
+            console.log(`🔧 Trying fields: ${fields}`);
             
-            // Clean and validate comments before storing
-            const cleanedComments = cleanComments(data.data);
+            const url = `https://graph.facebook.com/v21.0/${VIDEO_ID}/comments?fields=${fields}&access_token=${PAGE_ACCESS_TOKEN}`;
+            console.log('📡 API URL:', url.replace(PAGE_ACCESS_TOKEN, 'TOKEN_HIDDEN'));
             
-            // Update our stored comments (replace all)
-            allComments = cleanedComments;
-            lastFetchTime = new Date();
+            const response = await fetch(url);
             
-            if (cleanedComments.length > 0) {
-                console.log(`✅ Stored ${allComments.length} comments with REAL names`);
-                
-                // Show all stored comments with names
-                allComments.forEach((comment, i) => {
-                    console.log(`   ${i+1}. ${comment.from.name}: ${comment.message.substring(0, 40)}...`);
-                });
-            } else {
-                console.log('❌ No valid comments after cleaning');
+            console.log('📊 Response status:', response.status);
+            
+            if (!response.ok) {
+                console.log(`❌ Fields "${fields}" failed with status: ${response.status}`);
+                continue;
             }
-            return cleanedComments.length > 0;
-        } else {
-            console.log("💬 No comments found in API response");
-            return false;
+            
+            const data = await response.json();
+            
+            if (data.error) {
+                console.log(`❌ Fields "${fields}" error:`, data.error.message);
+                continue;
+            }
+
+            if (data.data && data.data.length > 0) {
+                console.log(`✅ Fields "${fields}" returned ${data.data.length} comments`);
+                console.log('🔍 First comment sample:', JSON.stringify(data.data[0], null, 2));
+                
+                // Clean and validate comments before storing
+                const cleanedComments = cleanComments(data.data);
+                
+                if (cleanedComments.length > 0) {
+                    // Update our stored comments (replace all)
+                    allComments = cleanedComments;
+                    lastFetchTime = new Date();
+                    
+                    console.log(`✅ Success with fields "${fields}" - Stored ${allComments.length} comments`);
+                    
+                    // Show all stored comments with names
+                    allComments.forEach((comment, i) => {
+                        console.log(`   ${i+1}. ${comment.from.name}: ${comment.message.substring(0, 40)}...`);
+                    });
+                    
+                    success = true;
+                    break; // Stop trying other field combinations
+                } else {
+                    console.log(`❌ Fields "${fields}" returned comments but no valid ones after cleaning`);
+                }
+            } else {
+                console.log(`❌ Fields "${fields}" returned no comments`);
+            }
         }
+        
+        if (!success) {
+            console.log('❌ All field combinations failed to get comments with names');
+        }
+        
+        return success;
+        
     } catch (err) {
         console.error("❌ Network error:", err.message);
         return false;
@@ -336,7 +359,7 @@ const overlayHtml = `
     <div class="container" id="commentsContainer">
         <div class="comment">
             <div class="user">System</div>
-            <div class="message">Waiting for Facebook comments... Will show REAL commenter names!</div>
+            <div class="message">Trying to get real commenter names... Check server logs.</div>
             <div class="time" id="lastUpdate">Loading...</div>
         </div>
     </div>
@@ -395,7 +418,7 @@ const overlayHtml = `
                 commentsContainer.innerHTML = \`
                     <div class="comment">
                         <div class="user">System</div>
-                        <div class="message">Waiting for comments from your viewers...</div>
+                        <div class="message">Working on getting real commenter names...</div>
                         <div class="time">\${new Date().toLocaleTimeString()}</div>
                     </div>
                 \`;
@@ -421,7 +444,7 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('📊 Port:', PORT);
     console.log('🔑 Token set:', PAGE_ACCESS_TOKEN ? 'Yes' : 'No');
     console.log('🎥 Video ID:', VIDEO_ID);
-    console.log('👤 Will extract REAL commenter names');
+    console.log('🔧 Will try multiple field combinations to get names');
     console.log('⚡ Server will start in 10 seconds...');
 });
 
