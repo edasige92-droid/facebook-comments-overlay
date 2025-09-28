@@ -39,7 +39,7 @@ app.get("/", (req, res) => {
                 <h1>Facebook Comments Overlay Server</h1>
                 <p>Server is running! Use this URL in OBS:</p>
                 <p><a href="/overlay.html">/overlay.html</a></p>
-                <p><strong>🎲 Comments are SHUFFLED randomly!</strong></p>
+                <p><strong>🎲 Comments continuously SHUFFLE (new + old)!</strong></p>
             </body>
         </html>
     `);
@@ -59,14 +59,34 @@ io.on('connection', (socket) => {
     });
 });
 
+// Store all comments in memory
+let allComments = [];
+let lastFetchTime = null;
+
 // SHUFFLE FUNCTION - Randomize array order
 function shuffleArray(array) {
-    const newArray = [...array]; // Create a copy to avoid modifying original
+    const newArray = [...array];
     for (let i = newArray.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
-        [newArray[i], newArray[j]] = [newArray[j], newArray[i]]; // Swap elements
+        [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
     }
     return newArray;
+}
+
+// Function to get a random selection of comments
+function getRandomComments(count = 5) {
+    if (allComments.length === 0) {
+        return [];
+    }
+    
+    // If we have fewer comments than requested, return all
+    if (allComments.length <= count) {
+        return shuffleArray(allComments);
+    }
+    
+    // Get random comments from the entire collection
+    const shuffled = shuffleArray(allComments);
+    return shuffled.slice(0, count);
 }
 
 // Function to get comments from Facebook
@@ -84,7 +104,7 @@ async function fetchComments() {
         if (!response.ok) {
             const errorText = await response.text();
             console.error('❌ HTTP Error:', response.status, errorText);
-            return;
+            return false;
         }
         
         const data = await response.json();
@@ -92,19 +112,38 @@ async function fetchComments() {
 
         if (data.error) {
             console.error("❌ Facebook API error:", data.error);
-            return;
+            return false;
         }
 
         if (data.data && data.data.length > 0) {
-            // SHUFFLE THE COMMENTS BEFORE SENDING
-            const shuffledComments = shuffleArray(data.data);
-            io.emit("comments", shuffledComments);
-            console.log(`✅ Sent ${shuffledComments.length} SHUFFLED comments to clients`);
+            // Update our stored comments
+            allComments = data.data;
+            lastFetchTime = new Date();
+            console.log(`✅ Stored ${allComments.length} total comments`);
+            return true;
         } else {
-            console.log("💬 No comments found");
+            console.log("💬 No new comments found");
+            return false;
         }
     } catch (err) {
         console.error("❌ Network error:", err.message);
+        return false;
+    }
+}
+
+// Function to send random comments to clients
+function sendRandomComments() {
+    if (allComments.length > 0) {
+        const randomComments = getRandomComments(5);
+        io.emit("comments", randomComments);
+        console.log(`🎲 Sent ${randomComments.length} RANDOM comments (from ${allComments.length} total)`);
+        
+        // Show which comments were sent (for debugging)
+        randomComments.forEach((comment, index) => {
+            console.log(`   ${index + 1}. ${comment.from.name}: ${comment.message.substring(0, 30)}...`);
+        });
+    } else {
+        console.log("💬 No comments available to send");
     }
 }
 
@@ -181,9 +220,6 @@ const overlayHtml = `
             border-radius: 5px;
             font-size: 12px;
         }
-        .connected { color: #4CAF50; }
-        .disconnected { color: #f44336; }
-        .error { color: #ff9800; }
         .shuffle-notice {
             position: fixed;
             top: 10px;
@@ -195,15 +231,29 @@ const overlayHtml = `
             font-size: 12px;
             font-weight: bold;
         }
+        .stats {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 11px;
+            color: #ccc;
+        }
+        .connected { color: #4CAF50; }
+        .disconnected { color: #f44336; }
+        .error { color: #ff9800; }
     </style>
 </head>
 <body>
-    <div class="shuffle-notice">🎲 Comments Shuffled</div>
+    <div class="shuffle-notice">🎲 Continuous Shuffle Active</div>
     <div class="status" id="status">Connecting...</div>
+    <div class="stats" id="stats">Total comments: 0</div>
     <div class="container" id="commentsContainer">
         <div class="comment">
             <div class="user">System</div>
-            <div class="message">Waiting for Facebook comments... Comments will appear in RANDOM order!</div>
+            <div class="message">Waiting for Facebook comments... System will continuously shuffle ALL comments (new + old)!</div>
             <div class="time" id="lastUpdate">Loading...</div>
         </div>
     </div>
@@ -214,6 +264,9 @@ const overlayHtml = `
         const commentsContainer = document.getElementById('commentsContainer');
         const statusElement = document.getElementById('status');
         const lastUpdateElement = document.getElementById('lastUpdate');
+        const statsElement = document.getElementById('stats');
+        
+        let totalCommentsCount = 0;
         
         socket.on('connect', () => {
             console.log('✅ Connected to server');
@@ -229,35 +282,36 @@ const overlayHtml = `
         });
         
         socket.on('comments', (comments) => {
-            console.log('Received SHUFFLED comments:', comments.length);
-            lastUpdateElement.textContent = 'Last update: ' + new Date().toLocaleTimeString();
+            console.log('Received RANDOM comments:', comments.length);
+            totalCommentsCount = Math.max(totalCommentsCount, comments.length);
+            lastUpdateElement.textContent = 'Last shuffle: ' + new Date().toLocaleTimeString();
+            statsElement.textContent = 'Showing: ' + comments.length + ' random comments';
             
             // Clear existing comments
             commentsContainer.innerHTML = '';
             
-            // Show latest 5 comments (already shuffled from server)
-            const recentComments = comments.slice(0, 5);
-            
-            recentComments.forEach(comment => {
+            // Display the random comments
+            comments.forEach(comment => {
                 const commentDiv = document.createElement('div');
                 commentDiv.className = 'comment';
                 
                 const time = new Date(comment.created_time).toLocaleTimeString();
+                const date = new Date(comment.created_time).toLocaleDateString();
                 
                 commentDiv.innerHTML = \`
                     <div class="user">\${comment.from.name}</div>
                     <div class="message">\${comment.message}</div>
-                    <div class="time">\${time}</div>
+                    <div class="time">\${date} \${time}</div>
                 \`;
                 
                 commentsContainer.appendChild(commentDiv);
             });
             
-            if (recentComments.length === 0) {
+            if (comments.length === 0) {
                 commentsContainer.innerHTML = \`
                     <div class="comment">
                         <div class="user">System</div>
-                        <div class="message">No comments found. Make sure your Facebook Live is active and has comments.</div>
+                        <div class="message">No comments found yet. Comments will appear here once viewers start commenting!</div>
                         <div class="time">\${new Date().toLocaleTimeString()}</div>
                     </div>
                 \`;
@@ -275,7 +329,7 @@ const overlayHtml = `
 `;
 
 fs.writeFileSync(path.join(publicDir, 'overlay.html'), overlayHtml);
-console.log('✅ Created overlay.html with SHUFFLE feature');
+console.log('✅ Created overlay.html with CONTINUOUS SHUFFLE feature');
 
 // Fix for Render: Use the port from environment variable
 server.listen(PORT, '0.0.0.0', () => {
@@ -283,13 +337,20 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('📊 Port:', PORT);
     console.log('🔑 Token set:', PAGE_ACCESS_TOKEN ? 'Yes' : 'No');
     console.log('🎥 Video ID:', VIDEO_ID);
-    console.log('🎲 SHUFFLE FEATURE: Comments will be randomized');
-    console.log('⚡ Server will start fetching comments in 10 seconds...');
+    console.log('🎲 CONTINUOUS SHUFFLE: Comments will randomly cycle every 20 seconds');
+    console.log('📝 System stores ALL comments and shows random selection');
+    console.log('⚡ Server will start in 10 seconds...');
 });
 
-// Wait for server to fully start before fetching comments
+// Wait for server to fully start
 setTimeout(() => {
-    // Fetch immediately, then every 30 seconds
+    // Fetch comments from Facebook every 2 minutes
     fetchComments();
-    setInterval(fetchComments, 30000);
+    setInterval(fetchComments, 120000); // 2 minutes
+    
+    // Send random comments to clients every 20 seconds
+    setInterval(sendRandomComments, 20000); // 20 seconds
+    
+    // Send initial random comments after first fetch
+    setTimeout(sendRandomComments, 15000);
 }, 10000);
