@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3000;
 
 // Get credentials from environment variables
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-const VIDEO_ID = process.env.VIDEO_ID || "836332258915642"; // Using your actual video ID
+const VIDEO_ID = process.env.VIDEO_ID || "836332258915642";
 
 // Security check
 if (!PAGE_ACCESS_TOKEN) {
@@ -39,7 +39,7 @@ app.get("/", (req, res) => {
                 <h1>Facebook Comments Overlay Server</h1>
                 <p>Server is running! Use this URL in OBS:</p>
                 <p><a href="/overlay.html">/overlay.html</a></p>
-                <p><strong>🎲 Comments continuously SHUFFLE (new + old)!</strong></p>
+                <p><strong>🎲 Comments with REAL commenter names!</strong></p>
             </body>
         </html>
     `);
@@ -73,35 +73,60 @@ function shuffleArray(array) {
     return newArray;
 }
 
-// Function to validate and clean comments - MORE RELAXED
+// Function to extract commenter name from various possible structures
+function extractCommenterName(comment) {
+    // Try different possible locations for the name
+    if (comment.from && comment.from.name) {
+        return comment.from.name;
+    }
+    if (comment.user && comment.user.name) {
+        return comment.user.name;
+    }
+    if (comment.author && comment.author.name) {
+        return comment.author.name;
+    }
+    if (comment.commenter && comment.commenter.name) {
+        return comment.commenter.name;
+    }
+    if (comment.created_by && comment.created_by.name) {
+        return comment.created_by.name;
+    }
+    
+    // If no name found, log the structure for debugging
+    console.log('🔍 No name found in comment structure:', Object.keys(comment));
+    return 'Viewer'; // Fallback name
+}
+
+// Function to validate and clean comments
 function cleanComments(comments) {
-    console.log('🔍 Raw comments structure:');
-    console.log(JSON.stringify(comments, null, 2));
+    console.log('🔍 Processing comments, checking structure...');
     
     const cleaned = comments.filter(comment => {
-        // More relaxed validation - only require message
-        const isValid = comment && comment.message;
+        // Only require that the comment exists and has a message
+        const hasMessage = comment && comment.message;
         
-        if (!isValid) {
-            console.log('❌ Filtered out invalid comment:', comment);
-        } else {
-            console.log('✅ Keeping comment:', {
-                hasFrom: !!comment.from,
-                fromName: comment.from?.name,
-                message: comment.message.substring(0, 50)
-            });
+        if (!hasMessage) {
+            console.log('❌ Filtered out comment without message:', comment);
+            return false;
         }
         
-        return isValid;
-    }).map(comment => ({
-        // Ensure all fields are present with fallbacks
-        message: comment.message || 'No message',
-        from: comment.from ? {
-            name: comment.from.name || 'Facebook User'
-        } : { name: 'Facebook User' },
-        created_time: comment.created_time || new Date().toISOString(),
-        id: comment.id || Math.random().toString()
-    }));
+        // Extract and log the name for debugging
+        const name = extractCommenterName(comment);
+        console.log(`✅ Found comment from "${name}": ${comment.message.substring(0, 30)}...`);
+        
+        return true;
+    }).map(comment => {
+        const commenterName = extractCommenterName(comment);
+        
+        return {
+            message: comment.message || 'No message',
+            from: {
+                name: commenterName
+            },
+            created_time: comment.created_time || new Date().toISOString(),
+            id: comment.id || Math.random().toString()
+        };
+    });
     
     console.log(`🔍 Cleaned ${cleaned.length} comments from ${comments.length} raw comments`);
     return cleaned;
@@ -128,7 +153,8 @@ async function fetchComments() {
     try {
         console.log('🔄 Fetching comments from Facebook...');
         
-        const url = `https://graph.facebook.com/v21.0/${VIDEO_ID}/comments?fields=from,message,created_time&access_token=${PAGE_ACCESS_TOKEN}`;
+        // Try different field combinations to get the commenter name
+        const url = `https://graph.facebook.com/v21.0/${VIDEO_ID}/comments?fields=from{name},message,created_time&access_token=${PAGE_ACCESS_TOKEN}`;
         console.log('📡 API URL:', url.replace(PAGE_ACCESS_TOKEN, 'TOKEN_HIDDEN'));
         
         const response = await fetch(url);
@@ -142,10 +168,7 @@ async function fetchComments() {
         }
         
         const data = await response.json();
-        console.log('📦 Full API response received');
-        console.log('📦 Response keys:', Object.keys(data));
-        console.log('📦 Has data array?', !!data.data);
-        console.log('📦 Data array length:', data.data?.length || 0);
+        console.log('📦 Full API response structure:', Object.keys(data));
 
         if (data.error) {
             console.error("❌ Facebook API error:", data.error);
@@ -153,6 +176,8 @@ async function fetchComments() {
         }
 
         if (data.data && data.data.length > 0) {
+            console.log('🔍 First comment sample:', JSON.stringify(data.data[0], null, 2));
+            
             // Clean and validate comments before storing
             const cleanedComments = cleanComments(data.data);
             
@@ -161,14 +186,14 @@ async function fetchComments() {
             lastFetchTime = new Date();
             
             if (cleanedComments.length > 0) {
-                console.log(`✅ Stored ${allComments.length} total valid comments`);
+                console.log(`✅ Stored ${allComments.length} comments with REAL names`);
                 
-                // Show sample of stored comments
-                allComments.slice(0, 3).forEach((comment, i) => {
-                    console.log(`   Sample ${i+1}: ${comment.from.name} - ${comment.message.substring(0, 30)}...`);
+                // Show all stored comments with names
+                allComments.forEach((comment, i) => {
+                    console.log(`   ${i+1}. ${comment.from.name}: ${comment.message.substring(0, 40)}...`);
                 });
             } else {
-                console.log('❌ No valid comments after cleaning - check the raw data above');
+                console.log('❌ No valid comments after cleaning');
             }
             return cleanedComments.length > 0;
         } else {
@@ -189,12 +214,10 @@ function sendRandomComments() {
             io.emit("comments", randomComments);
             console.log(`🎲 Sent ${randomComments.length} RANDOM comments (from ${allComments.length} total)`);
             
-            // Safely log the comments that were sent
+            // Log the comments that were sent
             randomComments.forEach((comment, index) => {
-                const userName = comment.from?.name || 'Unknown User';
-                const messagePreview = comment.message ? 
-                    comment.message.substring(0, 30) + (comment.message.length > 30 ? '...' : '') : 
-                    'No message';
+                const userName = comment.from.name;
+                const messagePreview = comment.message.substring(0, 30) + (comment.message.length > 30 ? '...' : '');
                 console.log(`   ${index + 1}. ${userName}: ${messagePreview}`);
             });
         } else {
@@ -307,13 +330,13 @@ const overlayHtml = `
     </style>
 </head>
 <body>
-    <div class="shuffle-notice">🎲 Continuous Shuffle Active</div>
+    <div class="shuffle-notice">🎲 Live Comments</div>
     <div class="status" id="status">Connecting...</div>
     <div class="stats" id="stats">Total comments: 0</div>
     <div class="container" id="commentsContainer">
         <div class="comment">
             <div class="user">System</div>
-            <div class="message">Debugging mode - checking Facebook comment structure...</div>
+            <div class="message">Waiting for Facebook comments... Will show REAL commenter names!</div>
             <div class="time" id="lastUpdate">Loading...</div>
         </div>
     </div>
@@ -342,10 +365,10 @@ const overlayHtml = `
         });
         
         socket.on('comments', (comments) => {
-            console.log('Received RANDOM comments:', comments.length);
+            console.log('Received comments:', comments.length);
             totalCommentsCount = Math.max(totalCommentsCount, comments.length);
-            lastUpdateElement.textContent = 'Last shuffle: ' + new Date().toLocaleTimeString();
-            statsElement.textContent = 'Showing: ' + comments.length + ' random comments';
+            lastUpdateElement.textContent = 'Last update: ' + new Date().toLocaleTimeString();
+            statsElement.textContent = 'Comments: ' + comments.length;
             
             // Clear existing comments
             commentsContainer.innerHTML = '';
@@ -357,7 +380,7 @@ const overlayHtml = `
                 
                 const time = new Date(comment.created_time).toLocaleTimeString();
                 const date = new Date(comment.created_time).toLocaleDateString();
-                const userName = comment.from?.name || 'Unknown User';
+                const userName = comment.from.name;
                 
                 commentDiv.innerHTML = \`
                     <div class="user">\${userName}</div>
@@ -372,7 +395,7 @@ const overlayHtml = `
                 commentsContainer.innerHTML = \`
                     <div class="comment">
                         <div class="user">System</div>
-                        <div class="message">Debugging: No comments being displayed. Check server logs for Facebook API response structure.</div>
+                        <div class="message">Waiting for comments from your viewers...</div>
                         <div class="time">\${new Date().toLocaleTimeString()}</div>
                     </div>
                 \`;
@@ -390,7 +413,7 @@ const overlayHtml = `
 `;
 
 fs.writeFileSync(path.join(publicDir, 'overlay.html'), overlayHtml);
-console.log('✅ Created overlay.html with DEBUGGING mode');
+console.log('✅ Created overlay.html');
 
 // Fix for Render: Use the port from environment variable
 server.listen(PORT, '0.0.0.0', () => {
@@ -398,7 +421,7 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('📊 Port:', PORT);
     console.log('🔑 Token set:', PAGE_ACCESS_TOKEN ? 'Yes' : 'No');
     console.log('🎥 Video ID:', VIDEO_ID);
-    console.log('🐛 DEBUGGING MODE: Will show raw Facebook API response');
+    console.log('👤 Will extract REAL commenter names');
     console.log('⚡ Server will start in 10 seconds...');
 });
 
