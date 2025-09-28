@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3000;
 
 // Get credentials from environment variables
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-const VIDEO_ID = process.env.VIDEO_ID || "836332258915642";
+const VIDEO_ID = process.env.VIDEO_ID || "836332258915642"; // Using your actual video ID
 
 // Security check
 if (!PAGE_ACCESS_TOKEN) {
@@ -73,24 +73,38 @@ function shuffleArray(array) {
     return newArray;
 }
 
-// Function to validate and clean comments
+// Function to validate and clean comments - MORE RELAXED
 function cleanComments(comments) {
-    return comments.filter(comment => {
-        // Only keep comments that have required fields
-        return comment && 
-               comment.message && 
-               comment.from && 
-               comment.from.name &&
-               comment.created_time;
+    console.log('🔍 Raw comments structure:');
+    console.log(JSON.stringify(comments, null, 2));
+    
+    const cleaned = comments.filter(comment => {
+        // More relaxed validation - only require message
+        const isValid = comment && comment.message;
+        
+        if (!isValid) {
+            console.log('❌ Filtered out invalid comment:', comment);
+        } else {
+            console.log('✅ Keeping comment:', {
+                hasFrom: !!comment.from,
+                fromName: comment.from?.name,
+                message: comment.message.substring(0, 50)
+            });
+        }
+        
+        return isValid;
     }).map(comment => ({
-        // Ensure all fields are present
+        // Ensure all fields are present with fallbacks
         message: comment.message || 'No message',
-        from: {
-            name: comment.from?.name || 'Unknown User'
-        },
-        created_time: comment.created_time,
-        id: comment.id
+        from: comment.from ? {
+            name: comment.from.name || 'Facebook User'
+        } : { name: 'Facebook User' },
+        created_time: comment.created_time || new Date().toISOString(),
+        id: comment.id || Math.random().toString()
     }));
+    
+    console.log(`🔍 Cleaned ${cleaned.length} comments from ${comments.length} raw comments`);
+    return cleaned;
 }
 
 // Function to get a random selection of comments
@@ -128,7 +142,10 @@ async function fetchComments() {
         }
         
         const data = await response.json();
-        console.log('📦 Received data with', data.data?.length || 0, 'comments');
+        console.log('📦 Full API response received');
+        console.log('📦 Response keys:', Object.keys(data));
+        console.log('📦 Has data array?', !!data.data);
+        console.log('📦 Data array length:', data.data?.length || 0);
 
         if (data.error) {
             console.error("❌ Facebook API error:", data.error);
@@ -138,16 +155,22 @@ async function fetchComments() {
         if (data.data && data.data.length > 0) {
             // Clean and validate comments before storing
             const cleanedComments = cleanComments(data.data);
-            console.log(`✅ Cleaned ${cleanedComments.length} valid comments (from ${data.data.length} total)`);
             
             // Update our stored comments (replace all)
             allComments = cleanedComments;
             lastFetchTime = new Date();
             
             if (cleanedComments.length > 0) {
-                console.log(`📝 Stored ${allComments.length} total valid comments`);
+                console.log(`✅ Stored ${allComments.length} total valid comments`);
+                
+                // Show sample of stored comments
+                allComments.slice(0, 3).forEach((comment, i) => {
+                    console.log(`   Sample ${i+1}: ${comment.from.name} - ${comment.message.substring(0, 30)}...`);
+                });
+            } else {
+                console.log('❌ No valid comments after cleaning - check the raw data above');
             }
-            return true;
+            return cleanedComments.length > 0;
         } else {
             console.log("💬 No comments found in API response");
             return false;
@@ -290,7 +313,7 @@ const overlayHtml = `
     <div class="container" id="commentsContainer">
         <div class="comment">
             <div class="user">System</div>
-            <div class="message">Waiting for Facebook comments... System will continuously shuffle ALL comments (new + old)!</div>
+            <div class="message">Debugging mode - checking Facebook comment structure...</div>
             <div class="time" id="lastUpdate">Loading...</div>
         </div>
     </div>
@@ -349,7 +372,7 @@ const overlayHtml = `
                 commentsContainer.innerHTML = \`
                     <div class="comment">
                         <div class="user">System</div>
-                        <div class="message">No comments found yet. Comments will appear here once viewers start commenting!</div>
+                        <div class="message">Debugging: No comments being displayed. Check server logs for Facebook API response structure.</div>
                         <div class="time">\${new Date().toLocaleTimeString()}</div>
                     </div>
                 \`;
@@ -367,7 +390,7 @@ const overlayHtml = `
 `;
 
 fs.writeFileSync(path.join(publicDir, 'overlay.html'), overlayHtml);
-console.log('✅ Created overlay.html with CONTINUOUS SHUFFLE feature');
+console.log('✅ Created overlay.html with DEBUGGING mode');
 
 // Fix for Render: Use the port from environment variable
 server.listen(PORT, '0.0.0.0', () => {
@@ -375,8 +398,7 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('📊 Port:', PORT);
     console.log('🔑 Token set:', PAGE_ACCESS_TOKEN ? 'Yes' : 'No');
     console.log('🎥 Video ID:', VIDEO_ID);
-    console.log('🎲 CONTINUOUS SHUFFLE: Comments will randomly cycle every 20 seconds');
-    console.log('🛡️  Added error handling for invalid comments');
+    console.log('🐛 DEBUGGING MODE: Will show raw Facebook API response');
     console.log('⚡ Server will start in 10 seconds...');
 });
 
