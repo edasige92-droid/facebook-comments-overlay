@@ -73,6 +73,26 @@ function shuffleArray(array) {
     return newArray;
 }
 
+// Function to validate and clean comments
+function cleanComments(comments) {
+    return comments.filter(comment => {
+        // Only keep comments that have required fields
+        return comment && 
+               comment.message && 
+               comment.from && 
+               comment.from.name &&
+               comment.created_time;
+    }).map(comment => ({
+        // Ensure all fields are present
+        message: comment.message || 'No message',
+        from: {
+            name: comment.from?.name || 'Unknown User'
+        },
+        created_time: comment.created_time,
+        id: comment.id
+    }));
+}
+
 // Function to get a random selection of comments
 function getRandomComments(count = 5) {
     if (allComments.length === 0) {
@@ -108,7 +128,7 @@ async function fetchComments() {
         }
         
         const data = await response.json();
-        console.log('📦 API Response:', JSON.stringify(data).substring(0, 200) + '...');
+        console.log('📦 Received data with', data.data?.length || 0, 'comments');
 
         if (data.error) {
             console.error("❌ Facebook API error:", data.error);
@@ -116,13 +136,20 @@ async function fetchComments() {
         }
 
         if (data.data && data.data.length > 0) {
-            // Update our stored comments
-            allComments = data.data;
+            // Clean and validate comments before storing
+            const cleanedComments = cleanComments(data.data);
+            console.log(`✅ Cleaned ${cleanedComments.length} valid comments (from ${data.data.length} total)`);
+            
+            // Update our stored comments (replace all)
+            allComments = cleanedComments;
             lastFetchTime = new Date();
-            console.log(`✅ Stored ${allComments.length} total comments`);
+            
+            if (cleanedComments.length > 0) {
+                console.log(`📝 Stored ${allComments.length} total valid comments`);
+            }
             return true;
         } else {
-            console.log("💬 No new comments found");
+            console.log("💬 No comments found in API response");
             return false;
         }
     } catch (err) {
@@ -133,17 +160,27 @@ async function fetchComments() {
 
 // Function to send random comments to clients
 function sendRandomComments() {
-    if (allComments.length > 0) {
-        const randomComments = getRandomComments(5);
-        io.emit("comments", randomComments);
-        console.log(`🎲 Sent ${randomComments.length} RANDOM comments (from ${allComments.length} total)`);
-        
-        // Show which comments were sent (for debugging)
-        randomComments.forEach((comment, index) => {
-            console.log(`   ${index + 1}. ${comment.from.name}: ${comment.message.substring(0, 30)}...`);
-        });
-    } else {
-        console.log("💬 No comments available to send");
+    try {
+        if (allComments.length > 0) {
+            const randomComments = getRandomComments(5);
+            io.emit("comments", randomComments);
+            console.log(`🎲 Sent ${randomComments.length} RANDOM comments (from ${allComments.length} total)`);
+            
+            // Safely log the comments that were sent
+            randomComments.forEach((comment, index) => {
+                const userName = comment.from?.name || 'Unknown User';
+                const messagePreview = comment.message ? 
+                    comment.message.substring(0, 30) + (comment.message.length > 30 ? '...' : '') : 
+                    'No message';
+                console.log(`   ${index + 1}. ${userName}: ${messagePreview}`);
+            });
+        } else {
+            console.log("💬 No comments available to send");
+            // Send empty array to clear display
+            io.emit("comments", []);
+        }
+    } catch (error) {
+        console.error('❌ Error in sendRandomComments:', error.message);
     }
 }
 
@@ -297,9 +334,10 @@ const overlayHtml = `
                 
                 const time = new Date(comment.created_time).toLocaleTimeString();
                 const date = new Date(comment.created_time).toLocaleDateString();
+                const userName = comment.from?.name || 'Unknown User';
                 
                 commentDiv.innerHTML = \`
-                    <div class="user">\${comment.from.name}</div>
+                    <div class="user">\${userName}</div>
                     <div class="message">\${comment.message}</div>
                     <div class="time">\${date} \${time}</div>
                 \`;
@@ -338,7 +376,7 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('🔑 Token set:', PAGE_ACCESS_TOKEN ? 'Yes' : 'No');
     console.log('🎥 Video ID:', VIDEO_ID);
     console.log('🎲 CONTINUOUS SHUFFLE: Comments will randomly cycle every 20 seconds');
-    console.log('📝 System stores ALL comments and shows random selection');
+    console.log('🛡️  Added error handling for invalid comments');
     console.log('⚡ Server will start in 10 seconds...');
 });
 
