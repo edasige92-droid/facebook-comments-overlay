@@ -9,7 +9,7 @@ const io = socketIo(server);
 
 const PORT = process.env.PORT || 3000;
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-const VIDEO_ID = process.env.VIDEO_ID || "657216063676510";
+const VIDEO_ID = process.env.VIDEO_ID || "1673033856946569";
 
 if (!PAGE_ACCESS_TOKEN) {
     console.error("❌ ERROR: PAGE_ACCESS_TOKEN environment variable is required");
